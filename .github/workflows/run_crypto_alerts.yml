@@ -2,7 +2,7 @@ name: Run Crypto Alerts
 
 on:
   schedule:
-    - cron: "*/45 * * * *"  # every 45 minutes
+    - cron: "*/45 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
