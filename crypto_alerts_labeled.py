@@ -1,104 +1,76 @@
-import pandas as pd
-import pandas_ta as ta
 import requests
-import time
+import pandas as pd
 import os
-from datetime import datetime
+import time
 
-# Use API key if provided
-headers = {}
-api_key = os.getenv("COINGECKO_API_KEY")
-if api_key:
-    headers["x-cg-pro-api-key"] = api_key
+# Read API key from environment variable (set in GitHub Secrets)
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY")
+HEADERS = {
+    "x-cg-pro-api-key": COINGECKO_API_KEY
+}
+API_BASE_URL = "https://api.coingecko.com/api/v3"
 
-def fetch_top_300():
-    all_coins = []
-    for page in range(1, 4):  # Top 300 coins
+def fetch_top_coins(n=300):
+    coins = []
+    pages = (n // 250) + (1 if n % 250 else 0)
+    for page in range(1, pages + 1):
+        url = f"{API_BASE_URL}/coins/markets"
+        params = {
+            "vs_currency": "usd",
+            "order": "market_cap_desc",
+            "per_page": 250,
+            "page": page,
+            "price_change_percentage": "1h,24h,7d"
+        }
         try:
-            response = requests.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "market_cap_desc",
-                    "per_page": 100,
-                    "page": page,
-                    "price_change_percentage": "24h"
-                },
-                headers=headers,
-                timeout=10
-            )
+            response = requests.get(url, headers=HEADERS, params=params, timeout=15)
             response.raise_for_status()
-            all_coins.extend(response.json())
-            time.sleep(1)  # Avoid rate limiting
+            coins.extend(response.json())
+            time.sleep(1)  # small delay to avoid bursts
         except Exception as e:
-            print(f"Failed to fetch page {page}: {e}")
-    df = pd.DataFrame(all_coins)[[
-        "id", "symbol", "current_price", "market_cap",
-        "total_volume", "price_change_percentage_24h"
-    ]]
-    return df
+            print(f"Error fetching page {page}: {e}")
+    return pd.DataFrame(coins)
 
-def calculate_indicators(df):
-    results = []
+def generate_alerts(df):
+    warming = []
+    cooling = []
+    strong = []
+
     for _, row in df.iterrows():
-        coin_id = row['id']
-        for attempt in range(3):
-            try:
-                ohlc_resp = requests.get(
-                    f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart",
-                    params={"vs_currency": "usd", "days": "7", "interval": "hourly"},
-                    headers=headers,
-                    timeout=10
-                )
-                ohlc_resp.raise_for_status()
-                ohlc = ohlc_resp.json()
-                if 'prices' not in ohlc or len(ohlc['prices']) < 50:
-                    raise ValueError("Missing or insufficient price data")
-                prices = [p[1] for p in ohlc['prices']]
-                break
-            except Exception as e:
-                if attempt == 2:
-                    print(f"Failed for coin {row['symbol']} after 3 attempts: {e}")
-                    prices = []
-                else:
-                    print(f"Retry {attempt + 1} for coin {row['symbol']}...")
-                    time.sleep(3)
-        if len(prices) < 50:
-            continue
-        price_series = pd.Series(prices)
-        rsi = ta.rsi(price_series, length=14).iloc[-1]
-        ema12 = ta.ema(price_series, length=12).iloc[-1]
-        ema26 = ta.ema(price_series, length=26).iloc[-1]
-        current_price = price_series.iloc[-1]
-        results.append({
-            "symbol": row['symbol'],
-            "price": current_price,
-            "market_cap": row['market_cap'],
-            "volume": row['total_volume'],
-            "24h %": row['price_change_percentage_24h'],
-            "RSI": rsi,
-            "EMA12": ema12,
-            "EMA26": ema26
-        })
-    return pd.DataFrame(results)
+        symbol = row.get("symbol", "").upper()
+        name = row.get("name", "")
+        price = row.get("current_price", 0)
+        pct_1h = row.get("price_change_percentage_1h_in_currency") or 0
+        pct_24h = row.get("price_change_percentage_24h_in_currency") or 0
+        pct_7d = row.get("price_change_percentage_7d_in_currency") or 0
 
-def categorize(df):
-    warming = df[(df['RSI'] > 50) & (df['RSI'] <= 70) & (df['EMA12'] > df['EMA26']) & (df['price'] > df['EMA12'])].copy()
-    warming['category'] = 'warming'
-    cooling = df[(df['RSI'] > 75) & (df['price'] < df['EMA12'])].copy()
-    cooling['category'] = 'cooling'
-    strong = df[(df['RSI'] > 60) & (df['EMA12'] > df['EMA26']) & (df['price'] > df['EMA12'])].copy()
-    strong['category'] = 'strong'
-    return pd.concat([warming, cooling, strong], ignore_index=True)
+        summary = f"{name} ({symbol}) - ${price:.4f} | {pct_1h:+.2f}% 1h | {pct_24h:+.2f}% 24h | {pct_7d:+.2f}% 7d"
+
+        if pct_1h > 2 and pct_24h > 5 and pct_7d > 10:
+            warming.append(summary)
+        if pct_1h < -2 and pct_24h < -5:
+            cooling.append(summary)
+        if pct_1h > 5 or pct_24h > 10 or pct_7d > 20:
+            strong.append(summary)
+
+    return warming, cooling, strong
+
+def save_alerts(warming, cooling, strong):
+    with open("triggered_coins.csv", "w") as f:
+        f.write("WARMING SIGNALS:\n")
+        f.writelines(line + "\n" for line in warming)
+        f.write("\nCOOLING SIGNALS:\n")
+        f.writelines(line + "\n" for line in cooling)
+        f.write("\nSTRONG GAINS:\n")
+        f.writelines(line + "\n" for line in strong)
+    print("✅ triggered_coins.csv updated.")
 
 def main():
-    df = fetch_top_300()
-    print("Fetched top 300 coins")
-    indicators = calculate_indicators(df)
-    print("Calculated technical indicators")
-    categorized = categorize(indicators)
-    categorized.to_csv("triggered_coins.csv", index=False)
-    print("triggered_coins.csv updated!")
+    print("🔄 Fetching top 300 coins...")
+    df = fetch_top_coins(n=300)
+    print("✅ Market data retrieved.")
+    warming, cooling, strong = generate_alerts(df)
+    save_alerts(warming, cooling, strong)
 
 if __name__ == "__main__":
     main()
