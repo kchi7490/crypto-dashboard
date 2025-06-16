@@ -1,4 +1,4 @@
-name: Run Crypto Alerts
+
 
 on:
   schedule:
@@ -28,10 +28,11 @@ jobs:
         run: |
           python crypto_alerts_labeled.py
 
-      - name: Commit updated CSV
+
+- name: Commit updated CSV
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add triggered_coins.csv
           git commit -m "Update alerts CSV [skip ci]" || echo "No changes to commit"
-          git push
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
