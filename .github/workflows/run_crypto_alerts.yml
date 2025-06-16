@@ -1,4 +1,4 @@
-
+name: Run Crypto Alerts
 
 on:
   schedule:
