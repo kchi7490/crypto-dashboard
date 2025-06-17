@@ -22,6 +22,14 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      - name: Confirm secrets are loaded (safe debug)
+        run: |
+          echo "COINGECKO_API_KEY is set: ${COINGECKO_API_KEY:+yes}"
+          echo "GH_PAT is set: ${GH_PAT:+yes}"
+        env:
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+
       - name: Run crypto alert script
         env:
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
